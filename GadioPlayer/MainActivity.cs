@@ -16,6 +16,7 @@ using System.Text;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace GadioPlayer
 {
@@ -97,7 +98,7 @@ namespace GadioPlayer
                 }
             }
             //DO content handling
-            Parallel.ForEach(GadioDoc.DocumentNode.Descendants("div").Where(d => d.Attributes.Contains("class") && d.Attributes["class"].Value.Contains("showcase-audio")), node =>
+            foreach(var node in GadioDoc.DocumentNode.Descendants("div").Where(d => d.Attributes.Contains("class") && d.Attributes["class"].Value.Contains("showcase-audio")))
             {
                 //Console.WriteLine("Gadio Hit!");
                 GadioItem thisItem = new GadioItem();
@@ -136,7 +137,7 @@ namespace GadioPlayer
                 }
 
                 GadioItemList.Add(thisItem);
-            });
+            }
             GadioItemList.Sort((a, b) => { return (int)((b.PostDate - a.PostDate).TotalSeconds); });
             return GadioItemList;
         }
@@ -151,28 +152,47 @@ namespace GadioPlayer
     [Activity(Label = "GadioPlayer", MainLauncher = true, Icon = "@drawable/icon")]
     public class MainActivity : Activity
     {
+        int max_page = 20;
         int current_page = 1;
         protected override void OnCreate(Bundle bundle)
         {
             base.OnCreate(bundle);
             SetContentView(Resource.Layout.Main);
-            List<GadioItem> frontPageItems = UrlHelper.getItemsByPage(current_page++);
+            List<GadioItem> frontPageItems = new List<GadioItem>();
             var listView = FindViewById<ListView>(Resource.Id.listView1);
             listView.Adapter = new HomeScreenAdapter(this, frontPageItems);
 
+            //TODO: check pages count here
+            bool more_to_load = true;
+            object loadingLock = new object();
 
-            listView.ScrollStateChanged += (s, e) =>
+            listView.Scroll+= (s, e) =>
             {
-                if (e.ScrollState == ScrollState.Idle)
+                more_to_load = current_page <= max_page;
+                if (more_to_load)
                 {
-                    if (listView.LastVisiblePosition == listView.Count - 1)
+                    if (listView.LastVisiblePosition >= listView.Count - 12 || listView.Count == 0)
                     {
+                        if (Monitor.IsEntered(loadingLock))
+                            return;
+                        Monitor.Enter(loadingLock);
                         var lastpos = listView.LastVisiblePosition;
-                        var toLoad = UrlHelper.getItemsByPage(current_page++);
-                        foreach (var t in toLoad)
-                            frontPageItems.Add(t);
-                        Console.WriteLine("DEBUGGING:" + listView.Adapter.Count);
-                        ((HomeScreenAdapter)listView.Adapter).NotifyDataSetChanged();
+                        //TODO: use async loading
+                        List<GadioItem> toLoad;
+                        Thread workTh = new Thread(() =>
+                        {
+                            toLoad = UrlHelper.getItemsByPage(current_page++);
+                            RunOnUiThread(() =>
+                            {
+                                Console.WriteLine("DEBUGGING:" + listView.Adapter.Count);
+                                foreach (var t in toLoad)
+                                    frontPageItems.Add(t);
+                                ((HomeScreenAdapter)listView.Adapter).NotifyDataSetChanged();
+                                Monitor.Exit(loadingLock);
+                            });
+
+                        });
+                        workTh.Start();
                     }
                 }
             };
